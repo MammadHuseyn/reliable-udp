@@ -5,10 +5,25 @@ import socket
 import sys
 import time
 
-from rudp import ACK, DATA, FIN, MAX_PAYLOAD, lossy_sendto, ppack, punpack
+from rudp import ACK, DATA, FIN, MAX_PAYLOAD, lossy_sendto, ppack, punpack, SYN
 
 TIMEOUT = 0.5 #replace with adaptive format
 MAX_RETRIES = 20
+
+def handshake(sock, addr, loss):
+    syn = ppack(SYN)
+    for attempt in range(MAX_RETRIES):
+        lossy_sendto(sock, syn, addr, loss)
+        sock.settimeout(TIMEOUT)
+        try:
+            data, _ = sock.recvfrom(2048)
+        except (socket.timeout, ConnectionResetError):
+            continue #no answer yet resend syn
+        parsed = punpack(data)
+        if parsed and parsed[0] & SYN and parsed[0] & ACK:
+            lossy_sendto(sock, ppack(ACK), addr, loss)
+            return True
+    return False
 
 def send_SaW(sock, addr, flags, seq, payload, loss):
     packet = ppack(flags,seq,0,payload)
@@ -35,7 +50,7 @@ def send_SaW(sock, addr, flags, seq, payload, loss):
                 continue
 
             f, _seq, ack, _payload = parsed
-            if f & ACK and ack == seq:
+            if f & ACK and ack == seq and not f & SYN:
                 return attempt
             #else duplicate, wait
     
@@ -63,6 +78,11 @@ def main():
     sent = retransmit = 0
     start = time.time()
     
+    if not handshake(sock, addr, loss):
+        sys.exit("could not connect to receiver")
+
+    print("connected")
+
 
     with open(path, "rb") as f:
         while True:

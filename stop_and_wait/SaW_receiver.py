@@ -1,7 +1,7 @@
 import socket
 import sys
 
-from rudp import ACK, DATA, FIN, lossy_sendto, ppack, punpack
+from rudp import ACK, DATA, FIN, lossy_sendto, ppack, punpack, SYN
 
 def main():
     if len(sys.argv) <3:
@@ -19,6 +19,8 @@ def main():
 
     expected = 0 #next seq number we are waiting for
 
+    peer = None
+
     with open(outpath, "wb") as out:
         while True:
             data, addr = sock.recvfrom(2048)
@@ -28,6 +30,16 @@ def main():
                 continue    #corrupt
 
             flags, seq, _ack, payload = parsed
+
+            if flags & SYN:
+                if peer is None or addr == peer:
+                    peer = addr
+                    lossy_sendto(sock, ppack(SYN | ACK), addr, loss)
+                continue
+
+            if addr != peer:
+                continue
+
 
             if flags & DATA:
                 if seq == expected:
