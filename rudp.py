@@ -1,6 +1,8 @@
 # RELIABLE UDP #
 
 import struct
+import random
+
 
 DATA, ACK, SYN, FIN = 1,2,4,8 #Flag bits
 #DATA 0x01 - indicates the packet contains use payload data
@@ -57,3 +59,15 @@ def punpack(packet:bytes):
         return None
 
     return flags, seq, ack, payload
+
+
+ 
+def lossy_sendto(sock, packet, addr, loss=0.0):
+    """sendto() that silently drops a packet with probability `loss`.
+ 
+    Simulates an unreliable network without needing tc/netem.
+    TODO (later): also simulate delay, duplication and reordering.
+    """
+
+    if random.random() >= loss:
+        sock.sendto(packet, addr)
