@@ -13,7 +13,7 @@ MAX_RETRIES = 20
 def send_SaW(sock, addr, flags, seq, payload, loss):
     packet = ppack(flags,seq,0,payload)
 
-    for attemp in range(1, MAX_RETRIES+1):
+    for attempt in range(1, MAX_RETRIES+1):
         lossy_sendto(sock,packet, addr,  loss)
         deadline = time.time()+TIMEOUT 
 
@@ -34,7 +34,7 @@ def send_SaW(sock, addr, flags, seq, payload, loss):
 
             f, _seq, ack, _payload = parsed
             if f & ACK and ack == seq:
-                return attemp
+                return attempt
             #else duplicate, wait
     
     return None
@@ -44,9 +44,9 @@ def main():
     if len(sys.argv)<4:
         sys.exit("usage: py SaW_sender.py <file> <host> <port> [loss]")
 
-    path, host, port = sys.argv[1], sys.argv[2], sys.argv[3]
+    path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
 
-    if len(sys.argv == 5):
+    if len(sys.argv) == 5:
         loss = float(sys.argv[4])
     else:
         loss = 0.0
