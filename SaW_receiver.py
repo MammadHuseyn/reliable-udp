@@ -41,6 +41,17 @@ def main():
 
             elif flags & FIN:
                 lossy_sendto(sock, ppack(ACK,0,seq),addr, loss)
+
+                sock.settimeout(0.2)
+
+                while(True):
+                    try:
+                        data, addr = sock.recvfrom(2048)
+                    except socket.timeout:
+                        break
+                    parsed=punpack(data)
+                    if parsed and parsed[0] & FIN:
+                        lossy_sendto(sock, ppack(ACK,0,parsed[1]), addr, loss)
                 break
 
     print(f"done: received {expected} packets -> {outpath}")

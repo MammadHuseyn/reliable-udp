@@ -26,6 +26,8 @@ def send_SaW(sock, addr, flags, seq, payload, loss):
                 data, _ = sock.recvfrom(2048)
             except socket.timeout:
                 break
+            except ConnectionResetError:
+                break
 
             parsed = punpack(data)
 
@@ -60,6 +62,7 @@ def main():
     seq = 0
     sent = retransmit = 0
     start = time.time()
+    
 
     with open(path, "rb") as f:
         while True:
@@ -72,6 +75,9 @@ def main():
             retransmit += attemps - 1
             sent +=1
             seq +=1
+
+            
+
     # Tell the receiver we're done.
     # Known weak spot: if the receiver's final ACK is lost, it has already
     # closed and we'll retry until MAX_RETRIES. TODO: handle FIN properly
@@ -79,7 +85,12 @@ def main():
 
     send_SaW(sock,addr, FIN, seq, b"", loss)
     elapsed = time.time() - start
-    print(f"sent {sent} packets, {retransmit} retransmissions, {elapsed:.2f}s")
-
+    #print(f"sent {sent} packets, {retransmit} retransmissions, {elapsed:.2f}s")
+    print(
+    f"loss={loss:.0%}, "
+    f"sent {sent} packets, "
+    f"{retransmit} retransmissions, "
+    f"{elapsed:.2f}s"
+)
 if __name__ == "__main__":
     main()
