@@ -30,7 +30,7 @@ def handshake(sock, addr, loss): #fucntion that performs initial handshake
             #meaning waits for both SYN adn ACK from server (initial response)
             lossy_sendto(sock, ppack(ACK), addr, loss) #then sends plain ACK packet to server
             return True
-            #handshake is done
+            #handshake is done   
     return False
 
 def send_SaW(sock, addr, flags, seq, payload, loss):
