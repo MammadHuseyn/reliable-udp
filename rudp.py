@@ -14,7 +14,7 @@ DATA, ACK, SYN, FIN = 1,2,4,8 #Flag bits
 HEADER = struct.Struct("!BIIHH")
 MAX_PAYLOAD = 1024
 
-#taken from https://github.com/MammadHuseyn/ping-traceroute_cmmds/blob/main/ping.py
+#taken exactly from from https://github.com/MammadHuseyn/ping-traceroute_cmmds/blob/main/ping.py
 def checksum(data: bytes) -> int:
 
     if len(data) %2: #adding padding, cause checksum processes data in 2-byte groups

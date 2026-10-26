@@ -1,28 +1,36 @@
 # Stop and wait sender. 
 # It does not have a sliding window
 
+#send one packet, wait for its acknowledgment, 
+# if arrives then next packet, not, then retransmit the packet
+
 import socket
 import sys
 import time
 
 from rudp import ACK, DATA, FIN, MAX_PAYLOAD, lossy_sendto, ppack, punpack, SYN
 
-TIMEOUT = 0.5 #replace with adaptive format
-MAX_RETRIES = 20
+TIMEOUT = 0.5 #next, try to replace with adaptive format
+MAX_RETRIES = 20 #sender will try to retransmit max this time, else give up
 
-def handshake(sock, addr, loss):
-    syn = ppack(SYN)
+def handshake(sock, addr, loss): #fucntion that performs initial handshake
+    syn = ppack(SYN) #seq = 0, ack =0
     for attempt in range(MAX_RETRIES):
-        lossy_sendto(sock, syn, addr, loss)
-        sock.settimeout(TIMEOUT)
+        lossy_sendto(sock, syn, addr, loss) #sends packets
+        sock.settimeout(TIMEOUT) 
         try:
-            data, _ = sock.recvfrom(2048)
+            data, _ = sock.recvfrom(2048) #wait for udp packet
         except (socket.timeout, ConnectionResetError):
             continue #no answer yet resend syn
         parsed = punpack(data)
-        if parsed and parsed[0] & SYN and parsed[0] & ACK:
-            lossy_sendto(sock, ppack(ACK), addr, loss)
+        if parsed and parsed[0] & SYN and parsed[0] & ACK: 
+            #parsed -> ensure the packet was successfully deoded
+            #parsed[0] & SYN -> checks if packet contains SYN flag
+            #parsed[0] & ACK -> checks if oacket contains ACK flag
+            #meaning waits for both SYN adn ACK from server (initial response)
+            lossy_sendto(sock, ppack(ACK), addr, loss) #then sends plain ACK packet to server
             return True
+            #handshake is done
     return False
 
 def send_SaW(sock, addr, flags, seq, payload, loss):
