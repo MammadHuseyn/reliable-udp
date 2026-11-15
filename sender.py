@@ -15,7 +15,7 @@ def handshake(sock, addr, loss): #fucntion that performs initial handshake
         sock.settimeout(TIMEOUT) 
         try:
             data, _ = sock.recvfrom(2048) #wait for udp packet
-        except (socket.timeout, ConnectionResetError):
+        except (socket.timeout, ConnectionResetError): #host unreachable error
             continue #no answer yet resend syn
         parsed = punpack(data)
         if parsed and parsed[0] & SYN and parsed[0] & ACK: 
@@ -64,13 +64,13 @@ def main():
     packets.append((FIN,b''))
     total = len(packets)
 
-    def transmit(seq):
+    def transmit(seq): #helper fucntion sending packets with seq number
         flags, payload = packets[seq]
         lossy_sendto(sock, ppack(flags, seq, 0, payload), addr, loss)
 
     base = next_seq =0
     timer = None
-    sock.settimeout(0.05)
+    sock.settimeout(0.05) #makes recvfrom waits max 50ms
     timeouts = 0    
     sent = retransmit = 0
     start = time.time()
@@ -78,7 +78,7 @@ def main():
     while base < total:
 
         #filling window
-        while next_seq < min(base+ WINDOW, total):
+        while next_seq < min(base+ WINDOW, total): #while there is room is window and it is less than total(packets left)
             transmit(next_seq)
             sent+=1
             if base == next_seq:
@@ -93,12 +93,11 @@ def main():
         except (socket.timeout, ConnectionResetError):
             pass
 
-
         else:
             parsed = punpack(raw)
             if parsed:
-                f,_seq, ack,_payload = parsed
-                if f & ACK and not f & SYN and base< ack <= next_seq:
+                flag ,_seq, ack,_payload = parsed
+                if flag & ACK and not flag & SYN and base< ack <= next_seq:
                     base = ack
                     timeouts=0
                     if base< next_seq:
@@ -112,7 +111,7 @@ def main():
 
             timeouts+=1 
             if timeouts > MAX_RETRIES:
-                sys.exit(f'gave up, np progress at packet {base}')
+                sys.exit(f'gave up, no progress at packet {base}')
 
             for i in range(base,next_seq):
                 transmit(i)
