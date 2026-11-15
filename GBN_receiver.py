@@ -7,7 +7,7 @@ LINGER = 0.2 #to retransmit after FIN
 
 def main():
     if len(sys.argv)<3:
-        sys.exit("usage: py receiver.py <port> <outfile> [loss]")
+        sys.exit("usage: py GBN_receiver.py <port> <outfile> [loss]")
 
     if len(sys.argv)==4:
         loss = float(sys.argv[3])
