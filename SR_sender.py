@@ -38,7 +38,7 @@ def main():
     path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
     addr = (host,port)
 
-    sock = socket.socket(socket.AF_NET, socket.SOCK_DGRAM)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     if not handshake(sock, addr, loss):
         sys.exit('could not connect to receiver')
@@ -75,7 +75,7 @@ def main():
         while next_seq<min(total, base+WINDOW):
             transmit(next_seq)
             sent+=1
-            next_seq+1
+            next_seq+=1
 
         #looking for ack
 
@@ -97,7 +97,7 @@ def main():
         now = time.time()
         for i in range(base, next_seq):
             if not acked[i] and now-sent_time[i] > TIMEOUT:
-                retries+=1
+                retries[i]+=1
                 if retries > MAX_RETRIES:
                     sys.exit(f'gave up on packet {i}')
                 transmit(i)
@@ -110,10 +110,6 @@ def main():
         f"{retransmit} retransmissions, "
         f"{elapsed:.2f}s"
     )
-
-
-
-
 
 
 
