@@ -4,7 +4,7 @@ from rudp import *
 
 
 
-TIMEOUT = 0.5 #next, try to replace with adaptive format
+TIMEOUT = 0.2 #next, try to replace with adaptive format
 MAX_RETRIES = 20 #sender will try to retransmit max this time, else give up
 WINDOW = 8
 

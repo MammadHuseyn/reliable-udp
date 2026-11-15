@@ -1,7 +1,7 @@
 import time, sys, socket
 from rudp import *
 
-TIMEOUT = 0.1 #next, try to replace with adaptive format
+TIMEOUT = 0.2 #next, try to replace with adaptive format
 MAX_RETRIES = 20 #sender will try to retransmit max this time, else give up
 WINDOW = 8
 
@@ -69,7 +69,7 @@ def main():
     sent = retransmit = 0
     start = time.time()
 
-    sock.settimeout(0.1)
+    sock.settimeout(TIMEOUT)
 
     while base<total:
         while next_seq<min(total, base+WINDOW):

@@ -2,7 +2,7 @@ import socket, time, sys
 from rudp import *
 
 
-LINGER = 0.2 #to retransmit after FIN
+LINGER = 1.0 #to retransmit after FIN
 
 
 def main():
