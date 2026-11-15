@@ -1,7 +1,7 @@
 import time, sys, socket
 from rudp import *
 
-TIMEOUT = 0.5 #next, try to replace with adaptive format
+TIMEOUT = 0.1 #next, try to replace with adaptive format
 MAX_RETRIES = 20 #sender will try to retransmit max this time, else give up
 WINDOW = 8
 
@@ -69,7 +69,7 @@ def main():
     sent = retransmit = 0
     start = time.time()
 
-    sock.settimeout(0.5)
+    sock.settimeout(0.1)
 
     while base<total:
         while next_seq<min(total, base+WINDOW):
@@ -89,19 +89,19 @@ def main():
                 f, _seq, ack, _payload = parsed
                 if f&ACK and not f &SYN and base <= ack < next_seq:
                     acked[ack] = True
-                    while base<total:
+                    while base<total and acked[base]:
                         base+=1
 
         #per-packet timeouts
 
         now = time.time()
         for i in range(base, next_seq):
-            if not acked[i] and now-sent_time[i] > TIMEOUT:
+            if not acked[i] and now - sent_time[i] > TIMEOUT:
                 retries[i]+=1
-                if retries > MAX_RETRIES:
+                if retries[i] > MAX_RETRIES:
                     sys.exit(f'gave up on packet {i}')
                 transmit(i)
-                retransmit+=1
+                retransmit += 1 
 
     elapsed = time.time() - start
     print(

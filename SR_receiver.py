@@ -2,7 +2,7 @@ import time, sys, socket
 from rudp import *
 
 WINDOW = 8
-LINGER = 0.2
+LINGER = 1.0
 
 def main():
     if len(sys.argv)<3:
@@ -29,7 +29,7 @@ def main():
             try:
                 data, addr = sock.recvfrom(2048)
             except socket.timeout:
-                pass
+                break
             except ConnectionResetError:
                 continue
 
