@@ -2,7 +2,7 @@ import time, sys, socket
 from rudp import *
 
 WINDOW = 256
-LINGER = 1.0
+LINGER = 4.0
 
 def main():
     if len(sys.argv)<3:
@@ -69,7 +69,7 @@ def main():
                         rcv_base+=1
 
                 #else if > window+base ignore
-    print(f'done: delivered {rcv_base-1}, packets -> {outpath}')
+    print(f'done: delivered {rcv_base}, packets -> {outpath}')
 
 
 
