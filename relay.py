@@ -1,3 +1,12 @@
+# the forwards path acts like a router. The link(cable or whatever) sends 'rate' packets per second
+# arriving packets waits in queue and if it is full, then it drops the new one
+# delivered ones are delayed with 'delay'
+# default vars:
+# RTT 40 ms, link -> 200 packets/second
+# bandwidth-delay product 200*0.04=8packets. -> how much data fits in pipe at once
+# relay prints start, windw size where overflow (28)
+
+
 import argparse #to write user-friendly command-line interfaces
 #trying to learn it instead of sys
 import signal
