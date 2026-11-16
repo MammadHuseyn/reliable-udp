@@ -1,7 +1,7 @@
 import time, sys, socket
 from rudp import *
 
-WINDOW = 8
+WINDOW = 256
 LINGER = 1.0
 
 def main():

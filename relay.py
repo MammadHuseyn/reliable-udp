@@ -56,11 +56,11 @@ def main():
     if log:
         log.write('time,queue_len,dropped\n')
     t0 = time.time()
-    print(f'relay :{args.listen_port} -> {server},  rate={args.rate} pkt/s,  queue={args.queue},  one-way delay{args.delay*1000} ms')
+    print(f'relay :{args.listen_port} -> {server},  rate={args.rate} pkt/s,  queue={args.queue},  one-way delay {args.delay*1000} ms')
     #delay * 2 = RTT
     #rate * RTT = exact number of packets to be in flight
-    print(f'bandwidth-delay produc ~ {args.rate * 2 * args.delay} packets '
-          f'(window above ~ {args.rate * 2 * args.delay + args.queue} will overflow the queue)')
+    print(f'bandwidth-delay produc ~{args.rate * 2 * args.delay} packets '
+          f'(window above ~{args.rate * 2 * args.delay + args.queue} will overflow the queue)')
 
 
     #packet delivery
@@ -134,7 +134,7 @@ def main():
             log.close()
         total = forwarded +dropped
         print(f'\nforward path: {forwarded} forwarded, {dropped} droppe by the queue'
-              f'({dropped / total:.1%} of {total}), max queue length {max_q}'
+              f' ({dropped / total:.1%} of {total}), max queue length {max_q}'
               if total else '\nno traffic')
 
 
