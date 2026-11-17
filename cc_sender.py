@@ -28,6 +28,15 @@ K = 4 # RTO = SRTT + K * RTTVAR
 CLOCK_G = 0.01 #Clock Granularity | smallest time tick your system clock can reliably measure
 
 
+#congestion control
+INITIAL_CWND = 1.0
+INITIAL_SSTHRESH = 1000.0 #slow start threshold
+MIN_SSTHRESH = 2.0
+MAX_CWND = 255
+
+
+
+
 class RTTEstimator:
     #Based on RFC 6298
 
@@ -80,15 +89,17 @@ def main():
     parsed.add_argument('file')
     parsed.add_argument('host')
     parsed.add_argument('port', type=int)
-    parsed.add_argument('--loss', type=float,  default = 0.0)
-    parsed.add_argument('--window', type = int, default = 8)
+    parsed.add_argument("loss_pos", nargs="?", type=float, default=None, metavar="loss")
+    parsed.add_argument('--loss', type=float,  default = None)
+    parsed.add_argument('--window', type = int, default = None)
     parsed.add_argument('--log', help = 'write RTT / ROT samples to this cv file')
     args = parsed.parse_args()
 
     addr = (args.host, args.port)
-    loss, window = args.loss, args.window
+    loss = args.loss_pos if args.loss_pos is not None else (args.loss or 0.0)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     est = RTTEstimator()
+    fixed = args.window is not None
 
     if not handshake(sock, addr, loss, est):
         sys.exit('could not connect to the receiver')
@@ -106,6 +117,15 @@ def main():
     acked = [False] * total
     sent_time = [0.0] * total
     retries = [0] * total
+    lost = set() #packets we consider lost and still have to retransmit
+
+    #congestion state
+    cwnd = float(args.window) if fixed else INITIAL_CWND
+    ssthresh = INITIAL_SSTHRESH
+    cap = args.window if fixed else MAX_CWND
+    pipe = 0    #packets we believe that are in the network, sent, not acked, not marked lost
+    recovery_end = 0 #losses of packets below this belong to an event
+
 
     if args.log:
         log = open(args.log, 'w')
@@ -129,18 +149,35 @@ def main():
 
     base = next_seq = 0
     sent = retransmit =timeouts = 0
+    max_cwnd_seen = cwnd
+    record("start")
 
     while base<total:
-        #filling window
-        while next_seq<min(window+base, total):
-            transmit(next_seq)
-            sent+=1
-            next_seq+=1
+        #filling window (while pipe has rooms)
+        allowed=max(1,int(min(cwnd,cap)))
+        while pipe<allowed:
+            if lost:
+                s=min(lost)
+                lost.discard(s)
+                retries[s]+=1
+                if retries[s]>MAX_RETRIES:
+                    sys.exit(f'gave up on packet {s}')
+                transmit(s)
+                retransmit+=1
+            elif next_seq<total and next_seq<base+cap:
+                transmit(next_seq)
+                sent+=1
+                next_seq+=1
+            else:
+                break
+            pipe +=1
+
+
 
         #read acks
         wait = 0.01
         for _ in range(256):
-            socket.timeout(wait)
+            sock.settimeout(wait)
             try:
                 raw, _ = sock.recvfrom(2048)
             except (socket.timeout , BlockingIOError, ConnectionResetError):
@@ -152,38 +189,56 @@ def main():
             f, _seq, ack, _payload = parsed
             if f & ACK and not f & SYN and base<=ack<next_seq and not acked[ack]:
                 acked[ack]= True
+
+                if ack in lost:
+                    lost.discard(ack)
+                else:
+                    pipe -=1
+
                 if retries[ack] == 0: # Karn's rulel
                     sample = time.time() - sent_time[ack]
                     est.sample(sample)
                     record('sample', sample)
+
+                if not fixed:
+                    if cwnd<ssthresh:
+                        cwnd+=1 #slow start, doubles every rtt
+                    else:
+                        cwnd+=1.0/cwnd #congestion avoidance +1per rtt
+                    cwnd = min(cwnd, MAX_CWND)
+                    max_cwnd_seen = max(max_cwnd_seen, cwnd)
+                
                 while base<total and acked[base]:
                     base+=1
+                record("ack")
 
         #per packet timeouts
         now = time.time()
 
-        expired = []
-        for i in range(base, next_seq):
-            if not acked[i] and (now-sent_time[i] > est.rto):
-                expired.append(i)
-
-        for e in expired:
-            retries[e]+=1
-            if retries[e]>=MAX_RETRIES:
-                sys.exit(f'gave up on the packet {e}')
-            transmit(e)
-            retransmit+=1
-        if expired:
-            timeouts+=1
+        #expired = []
+        newly_lost = [s for s in range(base, next_seq)
+                      if not acked[s] and s not in lost and now - sent_time[s] > est.rto]
+        if newly_lost:
+            for s in newly_lost:
+                lost.add(s)
+                pipe -= 1
             est.backoff()
-            record("timeout")
+            if not fixed and max(newly_lost) >= recovery_end:
+                ssthresh = max(cwnd / 2, MIN_SSTHRESH)      # multiplicative decrease
+                cwnd = 1.0                                   # timeout -> back to slow start
+                recovery_end = next_seq
+                timeouts += 1
+                record("cut")
+            else:
+                record("lost")
 
     elapsed = time.time() - start
-    print(f"loss={loss:.0%}, window={window}, sent {sent} packets, "
+    mode = f"fixed window={args.window}" if fixed else "cwnd"
+    print(f"loss={loss:.0%}, window={mode}, sent {sent} packets, "
           f"{retransmit} retransmissions, {elapsed:.2f}s")
     if est.srtt is not None:
-        print(f"final srtt={est.srtt * 1000:.1f} ms  rttvar={est.rttvar * 1000:.1f} ms  "
-              f"rto={est.rto * 1000:.1f} ms  timeout events={timeouts}")
+        print(f"final srtt={est.srtt * 1000:.1f} ms  rto={est.rto * 1000:.1f} ms  "
+              f"window cuts={timeouts}  max cwnd={max_cwnd_seen:.1f}  final ssthresh={ssthresh:.1f}")
     if log:
         log.close()
 
