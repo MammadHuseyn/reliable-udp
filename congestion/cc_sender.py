@@ -38,7 +38,10 @@ CLOCK_G = 0.01 #Clock Granularity | smallest time tick your system clock can rel
 INITIAL_CWND = 1.0
 INITIAL_SSTHRESH = 1000.0 #slow start threshold
 MIN_SSTHRESH = 2.0
-MAX_CWND = 255
+MAX_CWND = 200
+
+#fast loss detection quic
+PACKET_THRESHOLD = 3
 
 
 
@@ -98,6 +101,7 @@ def main():
     parsed.add_argument("loss_pos", nargs="?", type=float, default=None, metavar="loss")
     parsed.add_argument('--loss', type=float,  default = None)
     parsed.add_argument('--window', type = int, default = None)
+    parsed.add_argument("--timeout-only", action="store_true", help="disable fast loss detection (step 4 behaviour)")
     parsed.add_argument('--log', help = 'write RTT / ROT samples to this cv file')
     args = parsed.parse_args()
 
@@ -106,6 +110,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     est = RTTEstimator()
     fixed = args.window is not None
+    fast = not args.timeout_only
 
     if not handshake(sock, addr, loss, est):
         sys.exit('could not connect to the receiver')
@@ -125,6 +130,17 @@ def main():
     retries = [0] * total
     lost = set() #packets we consider lost and still have to retransmit
 
+
+    
+    #every transmission gets a incrreasing id
+    #fat loss deetction comapres this ids, not seq numbers
+    #fresh retransmissin is not declared lost because later data was acked
+
+    tx_of = [0]*total
+    tx_counter = 0
+    largest_acked_tx = -1
+
+
     #congestion state
     cwnd = float(args.window) if fixed else INITIAL_CWND
     ssthresh = INITIAL_SSTHRESH
@@ -140,21 +156,24 @@ def main():
     
     start = time.time()
 
-    def record(event, sample=0.0):
+    def record(event):
         if log:
-            log.write(f"{time.time() - start:.4f},{event},{sample:.5f},"
-                      f"{est.srtt or 0:.5f},{est.rttvar or 0:.5f},{est.rto:.5f}\n")
+            log.write(f"{time.time() - start:.4f},{event},{cwnd:.3f},{ssthresh:.2f},"
+                      f"{pipe},{est.srtt or 0:.5f},{est.rto:.5f}\n")
 
     if log:
-        log.write('time,event,sample,srtt,rttvar,rto\n')
+        log.write('time,event,cwnd,ssthresh,pipe,srtt,rto\n')
 
     def transmit(seq):
+        nonlocal tx_counter
         flags, payload = packets[seq]
         lossy_sendto(sock, ppack(flags, seq, 0, payload), addr, loss)
         sent_time[seq] = time.time()
+        tx_of[seq] = tx_counter
+        tx_counter += 1
 
     base = next_seq = 0
-    sent = retransmit =timeouts = 0
+    sent = retransmit =timeouts = fast_cuts = 0
     max_cwnd_seen = cwnd
     record("start")
 
@@ -204,7 +223,7 @@ def main():
                 if retries[ack] == 0: # Karn's rulel
                     sample = time.time() - sent_time[ack]
                     est.sample(sample)
-                    record('sample', sample)
+                    largest_acked_tx = max(largest_acked_tx, tx_of[ack])
 
                 if not fixed:
                     if cwnd<ssthresh:
@@ -218,6 +237,29 @@ def main():
                     base+=1
                 record("ack")
 
+
+        #fast loss detection
+
+        if fast and largest_acked_tx >= 0:
+            fast_lost = [s for s in range(base, next_seq)
+                         if not acked[s] and s not in lost 
+                         and largest_acked_tx - tx_of[s] >= PACKET_THRESHOLD]
+            if fast_lost:
+                for s in fast_lost:
+                    lost.add(s)
+                    pipe-=1
+                if not fixed and max(fast_lost) >= recovery_end:
+                    ssthresh = max(cwnd/2, MIN_SSTHRESH)
+                    cwnd =  ssthresh
+                    recovery_end = next_seq
+                    fast_cuts += 1
+                    record('fast_cut')
+                else:
+                    record('fast_lost')
+
+
+
+
         #per packet timeouts
         now = time.time()
 
@@ -229,10 +271,27 @@ def main():
                 lost.add(s)
                 pipe -= 1
             est.backoff()
-            if not fixed and max(newly_lost) >= recovery_end:
-                ssthresh = max(cwnd / 2, MIN_SSTHRESH)      # multiplicative decrease
-                cwnd = 1.0                                   # timeout -> back to slow start
+
+            new_event = max(newly_lost) >= recovery_end
+            #stalled-> nothing sent after the oldes expired packet has been acked
+            #so network delivered nothing for a whole RTO
+            stalled = (not fast) or largest_acked_tx < tx_of[min(newly_lost)]
+
+            if fixed:
+                record("lost")
+            elif new_event:
+                ssthresh = max(cwnd / 2, MIN_SSTHRESH)
                 recovery_end = next_seq
+                if stalled:
+                    cwnd = 1.0                  # severe: restart with slow start
+                    timeouts += 1
+                    record("cut")
+                else:
+                    cwnd = ssthresh             # mild: later packets got through, so halve
+                    fast_cuts += 1
+                    record("fast_cut")
+            elif stalled and any(retries[s] > 0 for s in newly_lost):
+                cwnd = 1.0                      # a retransmission was lost and nothing arrives
                 timeouts += 1
                 record("cut")
             else:
@@ -244,7 +303,8 @@ def main():
           f"{retransmit} retransmissions, {elapsed:.2f}s")
     if est.srtt is not None:
         print(f"final srtt={est.srtt * 1000:.1f} ms  rto={est.rto * 1000:.1f} ms  "
-              f"window cuts={timeouts}  max cwnd={max_cwnd_seen:.1f}  final ssthresh={ssthresh:.1f}")
+              f"timeout cuts={timeouts}  fast cuts={fast_cuts}  "
+              f"max cwnd={max_cwnd_seen:.1f}  final ssthresh={ssthresh:.1f}")
     if log:
         log.close()
 
