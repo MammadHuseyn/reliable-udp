@@ -172,9 +172,9 @@ def main():
         tx_of[seq] = tx_counter
         tx_counter += 1
 
-    base = next_seq = 0
+    base = next_seq = 0 #the oldest unacked packet, the next never-sent packet
     sent = retransmit =timeouts = fast_cuts = 0
-    max_cwnd_seen = cwnd
+    max_cwnd_seen = cwnd #the largest cwnd reached. for the summary
     record("start")
 
     while base<total:
@@ -189,7 +189,7 @@ def main():
                     sys.exit(f'gave up on packet {s}')
                 transmit(s)
                 retransmit+=1
-            elif next_seq<total and next_seq<base+cap:
+            elif next_seq<total and next_seq<base+cap: #to not overflow 255
                 transmit(next_seq)
                 sent+=1
                 next_seq+=1
@@ -205,14 +205,14 @@ def main():
             sock.settimeout(wait)
             try:
                 raw, _ = sock.recvfrom(2048)
-            except (socket.timeout , BlockingIOError, ConnectionResetError):
+            except (socket.timeout , BlockingIOError, ConnectionResetError): #once nothing is left -> blocking
                 break
             wait = 0.0
             parsed = punpack(raw)
             if not parsed:
                 continue
             f, _seq, ack, _payload = parsed
-            if f & ACK and not f & SYN and base<=ack<next_seq and not acked[ack]:
+            if f & ACK and not f & SYN and base<=ack<next_seq and not acked[ack]: #packet that is in flight and has actually been sent
                 acked[ack]= True
 
                 if ack in lost:
@@ -225,11 +225,11 @@ def main():
                     est.sample(sample)
                     largest_acked_tx = max(largest_acked_tx, tx_of[ack])
 
-                if not fixed:
+                if not fixed: #growing windows & it is not fixed in input
                     if cwnd<ssthresh:
-                        cwnd+=1 #slow start, doubles every rtt
+                        cwnd+=1 #slow start, doubles every rtt || full window of N packets returns N ACKs
                     else:
-                        cwnd+=1.0/cwnd #congestion avoidance +1per rtt
+                        cwnd+=1.0/cwnd #congestion avoidance +1packet per rtt || additive increase
                     cwnd = min(cwnd, MAX_CWND)
                     max_cwnd_seen = max(max_cwnd_seen, cwnd)
                 
@@ -240,17 +240,22 @@ def main():
 
         #fast loss detection
 
-        if fast and largest_acked_tx >= 0:
+        if fast and largest_acked_tx >= 0: #at least 1 ack arrived
             fast_lost = [s for s in range(base, next_seq)
                          if not acked[s] and s not in lost 
                          and largest_acked_tx - tx_of[s] >= PACKET_THRESHOLD]
+            #packet s is declared lost if:
+            #it is not acked yet
+            #it isnt waiting for retransmission
+            #transmission sent at least 3 transmissions after it has been acked
+            
             if fast_lost:
                 for s in fast_lost:
-                    lost.add(s)
-                    pipe-=1
-                if not fixed and max(fast_lost) >= recovery_end:
+                    lost.add(s) #packets go into less to be retransmitted next
+                    pipe-=1 #it is no longer in network
+                if not fixed and max(fast_lost) >= recovery_end: #one cut per congestion event
                     ssthresh = max(cwnd/2, MIN_SSTHRESH)
-                    cwnd =  ssthresh
+                    cwnd =  ssthresh #reno's fast recovery || check fails on the next ack   
                     recovery_end = next_seq
                     fast_cuts += 1
                     record('fast_cut')
@@ -272,7 +277,13 @@ def main():
                 pipe -= 1
             est.backoff()
 
-            new_event = max(newly_lost) >= recovery_end
+            # Timeouts still matter when fast detection can't trigger. 
+            # The typical case is a tail loss: the last 1–2 
+            # packets of a burst are lost, so there are never 3 later 
+            # transmissions to be ACKed. A small cwnd (2 or 3) has the same problem.
+
+
+            new_event = max(newly_lost) >= recovery_end #any expired packet sent after the last cut
             #stalled-> nothing sent after the oldes expired packet has been acked
             #so network delivered nothing for a whole RTO
             stalled = (not fast) or largest_acked_tx < tx_of[min(newly_lost)]
@@ -283,15 +294,15 @@ def main():
                 ssthresh = max(cwnd / 2, MIN_SSTHRESH)
                 recovery_end = next_seq
                 if stalled:
-                    cwnd = 1.0                  # severe: restart with slow start
+                    cwnd = 1.0                  #severe: restart with slow start
                     timeouts += 1
                     record("cut")
                 else:
-                    cwnd = ssthresh             # mild: later packets got through, so halve
+                    cwnd = ssthresh             #mild: later packets got through, so halve
                     fast_cuts += 1
                     record("fast_cut")
-            elif stalled and any(retries[s] > 0 for s in newly_lost):
-                cwnd = 1.0                      # a retransmission was lost and nothing arrives
+            elif stalled and any(retries[s] > 0 for s in newly_lost): #meaning the retransmission was lost too
+                cwnd = 1.0
                 timeouts += 1
                 record("cut")
             else:
