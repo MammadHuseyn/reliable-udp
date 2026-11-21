@@ -1,6 +1,10 @@
 import socket
 import sys
 
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from rudp import ACK, DATA, FIN, lossy_sendto, ppack, punpack, SYN
 
 def main():

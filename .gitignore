@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 *.pcap
 *.pcapng
+
+
+*.bin
+*.csv
+.venv/

@@ -2,6 +2,10 @@ import socket, time, sys
 from rudp import *
 
 
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 LINGER = 1.0 #to retransmit after FIN
 
 

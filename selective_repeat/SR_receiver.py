@@ -1,4 +1,9 @@
 import time, sys, socket
+
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from rudp import *
 
 WINDOW = 256

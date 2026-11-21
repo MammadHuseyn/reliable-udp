@@ -1,4 +1,10 @@
 import argparse, socket, sys, time
+
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
 from rudp import *
 
 #RTO - retransmission timeout

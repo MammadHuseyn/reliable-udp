@@ -1,12 +1,16 @@
-import socket, time
-import sys
+import time, sys, socket
+
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
 from rudp import *
-
-
 
 TIMEOUT = 0.2 #next, try to replace with adaptive format
 MAX_RETRIES = 20 #sender will try to retransmit max this time, else give up
 WINDOW = 8
+
 
 def handshake(sock, addr, loss): #fucntion that performs initial handshake
     syn = ppack(SYN) #seq = 0, ack =0
@@ -29,32 +33,25 @@ def handshake(sock, addr, loss): #fucntion that performs initial handshake
     return False
 
 
-#base -> oldest ack seq
-#next_seq -> next seq to send
-#window -> max number of packets in 1 flight
-#timer -> for the packet at base
-
-
 def main():
     if len(sys.argv)<4:
-        sys.exit("usage: py GBN_sender.py <file> <host> <port> [loss]")
-
-    path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+        sys.exit("usage: py SR_sender.py <file> <host> <port> [loss]")
     if len(sys.argv) == 5:
         loss = float(sys.argv[4])
     else:
         loss = 0.0
 
+    path, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
     addr = (host,port)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     if not handshake(sock, addr, loss):
-        sys.exit("could not connect to receiver")
+        sys.exit('could not connect to receiver')
 
-    print("connected")
+    print('connected')
 
-    with open(path, "rb") as f:
+    with open(path, 'rb') as f:
         data = f.read()
 
     packets = []
@@ -64,62 +61,55 @@ def main():
     packets.append((FIN,b''))
     total = len(packets)
 
-    def transmit(seq): #helper fucntion sending packets with seq number
-        flags, payload = packets[seq]
-        lossy_sendto(sock, ppack(flags, seq, 0, payload), addr, loss)
+    #per-packet state
+    acked = [False] * total #packet n was confirmed?
+    sent_time = [0.0] *total #time it was last sent
+    retries = [0] * total #number of retransmissions
 
-    base = next_seq =0
-    timer = None
-    sock.settimeout(0.05) #makes recvfrom waits max 50ms
-    timeouts = 0    
+    def transmit(seq):
+        flags, payload = packets[seq]
+        lossy_sendto(sock, ppack(flags,seq, 0, payload),addr, loss)
+        sent_time[seq] = time.time()
+
+    base = next_seq = 0
     sent = retransmit = 0
     start = time.time()
 
-    while base < total:
+    sock.settimeout(TIMEOUT)
 
-        #filling window
-        while next_seq < min(base+ WINDOW, total): #while there is room is window and it is less than total(packets left)
+    while base<total:
+        while next_seq<min(total, base+WINDOW):
             transmit(next_seq)
             sent+=1
-            if base == next_seq:
-                timer = time.time()
+            next_seq+=1
 
-            next_seq += 1
-
-        #cheking and processing ack
+        #looking for ack
 
         try:
-            raw, _ =sock.recvfrom(2048)
+            raw, _ = sock.recvfrom(2048)
         except (socket.timeout, ConnectionResetError):
             pass
-
         else:
             parsed = punpack(raw)
             if parsed:
-                flag ,_seq, ack,_payload = parsed
-                if flag & ACK and not flag & SYN and base< ack <= next_seq:
-                    base = ack
-                    timeouts=0
-                    if base< next_seq:
-                        timer = time.time()
-                    else:
-                        timer = None
+                f, _seq, ack, _payload = parsed
+                if f&ACK and not f &SYN and base <= ack < next_seq:
+                    acked[ack] = True
+                    while base<total and acked[base]:
+                        base+=1
 
-        #timeout
+        #per-packet timeouts
 
-        if timer is not None and time.time()-timer > TIMEOUT:
-
-            timeouts+=1 
-            if timeouts > MAX_RETRIES:
-                sys.exit(f'gave up, no progress at packet {base}')
-
-            for i in range(base,next_seq):
+        now = time.time()
+        for i in range(base, next_seq):
+            if not acked[i] and now - sent_time[i] > TIMEOUT:
+                retries[i]+=1
+                if retries[i] > MAX_RETRIES:
+                    sys.exit(f'gave up on packet {i}')
                 transmit(i)
-                retransmit+=1
-            timer = time.time()
+                retransmit += 1 
 
-    elapsed = time.time()  - start
-
+    elapsed = time.time() - start
     print(
         f"loss={loss:.0%}, window={WINDOW}, "
         f"sent {sent} packets, "
@@ -129,5 +119,5 @@ def main():
 
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

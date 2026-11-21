@@ -8,6 +8,10 @@ import socket
 import sys
 import time
 
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from rudp import ACK, DATA, FIN, MAX_PAYLOAD, lossy_sendto, ppack, punpack, SYN
 
 TIMEOUT = 0.5 #next, try to replace with adaptive format
