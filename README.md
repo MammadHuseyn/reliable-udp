@@ -9,7 +9,7 @@ It contains three classic reliability strategies, plus a congestion-controlled s
 | **Stop-and-Wait (SaW)** | Sends one packet, waits for its ACK, retransmits on timeout. |
 | **Go-Back-N (GBN)** | Sends packets in a `WINDOW`. The receiver accepts only in-order packets and sends cumulative ACKs. On timeout, the sender resends everything from the oldest unACKed packet. |
 | **Selective Repeat (SR)** | Sends packets in a `WINDOW`. The receiver buffers out-of-order packets and ACKs each one individually. The sender has a timer per packet and resends only what was lost. |
-| **Congestion control (CC)** | Selective Repeat with an adaptive timeout (RTT estimation) and a congestion window `cwnd` (slow start and AIMD), tested against a simulated bottleneck router (`relay.py`). |
+| **Congestion control (CC)** | Selective Repeat with an adaptive timeout (RTT estimation) and a congestion window `cwnd` (slow start and AIMD) and fast loss detection, tested against a simulated bottleneck router (`relay.py`). |
 
 UDP itself can lose, corrupt, duplicate and reorder datagrams. This project adds a checksum, sequence numbers, acknowledgements, retransmission timers and a connection handshake on top of it.
 
@@ -38,7 +38,7 @@ reliable-udp/
   selective_repeat/
     SR_sender.py           SR_receiver.py
   congestion/
-    cc_sender.py           # SR sender with adaptive timeout and cwnd
+    cc_sender.py           # SR sender with adaptive timeout, cwnd and fast loss detection
     relay.py               # simulated bottleneck router
 ```
 
@@ -192,7 +192,7 @@ The FIN is simply the last packet in the sequence and goes through the same reli
 
 ## Congestion control
 
-The fixed-window protocols above send at a speed the programmer chose. On a shared network, that speed has to be found at run time: too slow wastes capacity, too fast overflows router queues, and every dropped packet becomes a retransmission that makes the overload worse. `congestion/cc_sender.py` is the Selective Repeat sender with the two pieces that fix this: an **adaptive timeout** and a **congestion window**.
+The fixed-window protocols above send at a speed the programmer chose. On a shared network, that speed has to be found at run time: too slow wastes capacity, too fast overflows router queues, and every dropped packet becomes a retransmission that makes the overload worse. `congestion/cc_sender.py` is the Selective Repeat sender with the pieces that fix this: an **adaptive timeout**, a **congestion window** and **fast loss detection**.
 
 ### The simulated network: `relay.py`
 
@@ -235,6 +235,7 @@ py congestion/cc_sender.py bigfile.bin 127.0.0.1 9000 --log cc.csv
 - **Keep the sender's `loss` at 0.** Random loss is misread as congestion and keeps `cwnd` tiny. Let the relay's queue create the losses.
 - The SR receiver's `WINDOW` must be at least `MAX_CWND` (set it to 256).
 - `--window N` makes `cc_sender.py` use a fixed window of N instead of `cwnd`, which is useful for comparison.
+- `--timeout-only` turns fast loss detection off, so losses are found only by timeout. Useful for comparing the two.
 - `--log` writes `time, event, cwnd, ssthresh, pipe, srtt, rto` to a CSV file for plotting.
 
 ### Adaptive timeout (RTT estimation)
@@ -258,24 +259,49 @@ RTO    = SRTT + 4 * RTTVAR
 |---|---|---|
 | **Slow start** (`cwnd < ssthresh`) | `cwnd += 1` per ACK | Doubles every RTT |
 | **Congestion avoidance** (`cwnd >= ssthresh`) | `cwnd += 1 / cwnd` per ACK | Grows by about 1 packet per RTT |
-| **Loss** (timeout) | `ssthresh = cwnd / 2`, `cwnd = 1` | Halve the remembered limit, restart with slow start |
+| **Mild loss** (fast detection, or a timeout while later packets still arrive) | `ssthresh = cwnd / 2`, `cwnd = ssthresh` | Halve the window and continue in congestion avoidance |
+| **Severe loss** (timeout, nothing arriving) | `ssthresh = cwnd / 2`, `cwnd = 1` | Halve the remembered limit, restart with slow start |
 
 Slow increase with fast decrease is called **AIMD** (additive increase, multiplicative decrease). Plotting `cwnd` over time gives the typical sawtooth.
 
 Implementation details that matter:
 
 - **`pipe`** counts packets believed to be in the network (sent, not acked, not marked lost). The sender sends only while `pipe < cwnd`, which also means each returning ACK releases exactly one new packet (ACK clocking).
-- **`lost`** holds packets that timed out. They are retransmitted before new data, and count against `cwnd`, so recovery after a cut also starts slowly instead of flooding the queue again.
+- **`lost`** holds packets declared lost (by fast detection or by timeout). They are retransmitted before new data, and count against `cwnd`, so recovery after a cut also starts slowly instead of flooding the queue again.
 - **`recovery_end`:** a burst of drops from one queue overflow is one loss event, so `cwnd` is cut once. Packets lost that were sent before the last cut do not cause another cut.
+
+### Fast loss detection
+
+Waiting for a timeout is slow: a lost packet is noticed only after a full RTO, and by then the sender has stopped. Instead, `cc_sender.py` uses the **packet threshold** rule from QUIC (RFC 9002):
+
+> A packet is lost if a packet sent at least `PACKET_THRESHOLD` (3) transmissions after it has already been acknowledged.
+
+One or two later packets arriving first could just be reordering; three is treated as a loss. This finds a loss about one RTT after it happens, while the network is still delivering packets.
+
+- **Transmission ids, not sequence numbers.** Every send, including every retransmission, gets a new increasing id (`tx_of[seq]`). The rule compares ids, so a fresh retransmission of an old sequence number is not immediately declared lost again just because later sequence numbers were ACKed long ago.
+- **`largest_acked_tx`** is the highest transmission id known to be delivered. Only ACKs of packets that were never retransmitted update it (same reasoning as Karn's rule: for a retransmitted packet it is unclear which transmission the ACK answers).
+- **No RTO backoff** on a fast loss, because the network is still working.
+
+Timeouts are still needed, for losses the threshold cannot see, for example the last packets of a transfer (there are not three later packets to be ACKed). A timeout is then classified:
+
+| Situation | Meaning | Reaction |
+|---|---|---|
+| New loss event, later packets **were** ACKed | Isolated loss the threshold missed | Halve (`cwnd = ssthresh`), counted as a fast cut |
+| New loss event, **nothing** later ACKed (`stalled`) | The path delivered nothing for a whole RTO | `cwnd = 1`, counted as a timeout cut |
+| Same event, a **retransmission** timed out and nothing arrives | Even the halved window is not working | `cwnd = 1` (ssthresh is not halved again) |
+| Same event, otherwise | Another drop from a loss already handled | Only logged |
+
+The sender's summary reports `timeout cuts` and `fast cuts` separately. Running the same experiment with and without `--timeout-only` shows most cuts moving from the first to the second, and a shorter transfer time.
 
 ### What you should see
 
 With the default relay settings and a large file:
 
 1. `cwnd` doubles every RTT at the start (slow start).
-2. It overshoots the capacity of the path, because a timeout takes a full RTO to notice, and the first loss event happens.
-3. After that it oscillates around the path capacity (pipe + queue, about 28 packets here), with `srtt` rising as the queue fills and falling after each cut.
+2. It overshoots the capacity of the path, because a loss is noticed only about one RTT after the queue overflows, and the first loss event happens.
+3. After that it oscillates around the path capacity (pipe + queue, about 28 packets here): mostly fast cuts that halve `cwnd`, followed by slow linear growth, which gives the AIMD sawtooth. `srtt` rises as the queue fills and falls after each cut.
 4. Compared with a fixed window, a window that is too large causes many queue drops and retransmissions, a window that is too small leaves the link underused, and `cwnd` finds a good level on its own.
+5. With `--timeout-only`, every loss costs a full RTO and sends `cwnd` back to 1, so the transfer is slower and the plot shows repeated slow starts instead of a sawtooth.
 
 ### Constants (`cc_sender.py`)
 
@@ -289,6 +315,7 @@ With the default relay settings and a large file:
 | `INITIAL_CWND` | 1 | Starting congestion window. |
 | `INITIAL_SSTHRESH` | 1000 | Starting slow-start threshold (effectively unlimited). |
 | `MAX_CWND` | 200 | Hard cap, must stay below the receiver's `WINDOW`. |
+| `PACKET_THRESHOLD` | 3 | Later transmissions that must be ACKed before a packet is declared lost (fast loss detection). |
 
 `INITIAL_RTO` and `MIN_RTO` deliberately differ from RFC 6298 (1 s each) because the experiments run on localhost, where the real round trip is a few milliseconds.
 
@@ -314,7 +341,8 @@ When the SR receiver is used with `cc_sender.py`, set `LINGER` to at least `2 x 
 
 - **End-of-transfer uncertainty.** If the last ACKs are lost and the receiver exits before the sender receives one, the sender retries until `MAX_RETRIES` and then reports `gave up on packet N`, even though the file may have arrived completely. Raising `LINGER` reduces this. It is an instance of the two-generals problem, and real protocols such as TCP (TIME_WAIT) only make it unlikely rather than impossible.
 - **Fixed timeout in SaW, GBN and SR.** `TIMEOUT` is a constant there and does not adapt to measured round-trip time. Only `cc_sender.py` estimates RTT and backs off exponentially.
-- **Loss is detected by timeout only.** `cc_sender.py` has no fast retransmit yet (declaring a packet lost when later packets are already acknowledged), so every loss costs a full RTO and `cwnd` falls back to 1.
+- **Fast loss detection only uses the packet threshold.** QUIC also declares a packet lost when it is older than about 9/8 of the RTT while newer packets were ACKed (time threshold), and replaces the RTO with a probe timeout (PTO). Neither is implemented, so losses at the end of a transfer still wait for a full RTO.
+- **ACKs of retransmitted packets do not help fast detection.** Because sequence numbers are reused for retransmissions, those ACKs are ambiguous and are ignored for `largest_acked_tx`. Under heavy loss, detection falls back to timeouts. QUIC avoids this by never reusing packet numbers.
 - **Random loss is treated as congestion.** Like classic TCP Reno, `cc_sender.py` cannot tell the two apart.
 - **No flow control.** The receiver does not advertise its free buffer space. The sender simply keeps `cwnd` below a fixed cap.
 - **One sender and one flow at a time.** The receiver serves a single peer and handles one file per run. Fairness between competing senders has not been tested.
