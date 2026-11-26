@@ -15,13 +15,12 @@ UDP itself can lose, corrupt, duplicate and reorder datagrams. This project adds
 
 Packet loss is simulated with a basic random function. The congestion-control experiments additionally use a relay that simulates a rate-limited link with a queue and a delay.
 
-(TODO: simulate delay, duplication and reordering in `lossy_sendto`.)
 
 
 ## Requirements
 
-- Python 3.8 or newer
-- Standard library only (`socket`, `struct`, `random`, `time`, `sys`, `argparse`, ...)
+- Python
+- requirements.txt
 
 
 ## Project layout
@@ -39,10 +38,10 @@ reliable-udp/
     SR_sender.py           SR_receiver.py
   congestion/
     cc_sender.py           # SR sender with adaptive timeout, cwnd and fast loss detection
-    relay.py               # simulated bottleneck router
+    relay.py               # simulats bottleneck router
 ```
 
-Every sender and receiver imports `rudp.py` from the repository root. Each script adds the root to Python's search path itself, so it works no matter which folder you run it from:
+Every sender and receiver imports `rudp.py` from the root. Each script adds the root to Python's search path itself, so it works no matter which folder you run it from:
 
 ```python
 import sys
@@ -53,7 +52,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from rudp import ...
 ```
 
-The commands below assume you are in the repository root.
 
 
 ## Usage
@@ -79,9 +77,6 @@ py <folder>/<PROTO>_sender.py   <file> <host> <port> [loss]
 | `host` | Receiver's IP address (`127.0.0.1` for the same machine). |
 | `loss` | Optional. Probability (0.0 to 1.0) that each packet *this program sends* is dropped. Default `0.0`. |
 
-On Linux or macOS use `python3` instead of `py`, and `/` in paths.
-
-File paths such as `somefile.bin` and `received.bin` are relative to the folder you run the command from, not to the script.
 
 ### Example
 
@@ -102,15 +97,6 @@ The sender prints a summary when it finishes:
 ```
 connected
 loss=20%, window=8, sent 41 packets, 13 retransmissions, 3.06s
-```
-
-### Verify the transfer
-
-The received file should be identical to the original:
-
-```
-fc /b somefile.bin received.bin      # Windows
-cmp somefile.bin received.bin        # Linux / macOS (no output = identical)
 ```
 
 ### About the `loss` argument
@@ -138,8 +124,6 @@ Every packet is a 13-byte header followed by up to 1024 bytes of payload. The he
 | `ACK` | `0x02` | Acknowledges a received packet. |
 | `SYN` | `0x04` | Connection request. |
 | `FIN` | `0x08` | End of transfer. |
-
-A packet is tested with `flags & FLAG` and combined with `FLAG1 | FLAG2`. For example, the handshake reply is `SYN | ACK`.
 
 **Sequence numbers count packets, not bytes.** The first data packet is 0, the next is 1, and so on. The FIN packet takes the next number after the last data packet. A 4-byte field never wraps in practice for this use.
 
@@ -303,38 +287,6 @@ With the default relay settings and a large file:
 4. Compared with a fixed window, a window that is too large causes many queue drops and retransmissions, a window that is too small leaves the link underused, and `cwnd` finds a good level on its own.
 5. With `--timeout-only`, every loss costs a full RTO and sends `cwnd` back to 1, so the transfer is slower and the plot shows repeated slow starts instead of a sawtooth.
 
-### Constants (`cc_sender.py`)
-
-| Constant | Default | Meaning |
-|---|---|---|
-| `INITIAL_RTO` | 0.5 s | Timeout used until the first RTT sample exists. |
-| `MIN_RTO` | 0.05 s | Lower limit for the timeout. |
-| `MAX_RTO` | 2.0 s | Upper limit for the timeout (and for backoff). |
-| `MAX_RETRIES` | 12 | Retransmissions of one packet before giving up. |
-| `ALPHA`, `BETA`, `K` | 1/8, 1/4, 4 | RTT estimator weights (RFC 6298). |
-| `INITIAL_CWND` | 1 | Starting congestion window. |
-| `INITIAL_SSTHRESH` | 1000 | Starting slow-start threshold (effectively unlimited). |
-| `MAX_CWND` | 200 | Hard cap, must stay below the receiver's `WINDOW`. |
-| `PACKET_THRESHOLD` | 3 | Later transmissions that must be ACKed before a packet is declared lost (fast loss detection). |
-
-`INITIAL_RTO` and `MIN_RTO` deliberately differ from RFC 6298 (1 s each) because the experiments run on localhost, where the real round trip is a few milliseconds.
-
-
-## Configuration (fixed-window protocols)
-
-Constants are defined at the top of each file.
-
-| Constant | Where | Default | Meaning |
-|---|---|---|---|
-| `MAX_PAYLOAD` | `rudp.py` | 1024 | Maximum payload bytes per packet. |
-| `TIMEOUT` | senders | 0.5 s | Time before an unacked packet is retransmitted. |
-| `MAX_RETRIES` | senders | 20 | Retries before giving up (per packet for SaW and SR, consecutive timeouts without progress for GBN). |
-| `WINDOW` | GBN / SR sender, SR receiver | 8 | Maximum packets in flight. **The SR receiver's `WINDOW` must be at least the sender's.** |
-| `LINGER` | GBN / SR receivers | 2.0 s | How long the receiver stays alive after the FIN. |
-
-Setting `WINDOW = 1` makes GBN and SR behave like stop-and-wait, which is a useful sanity check.
-
-When the SR receiver is used with `cc_sender.py`, set `LINGER` to at least `2 x MAX_RTO` (4 s), so a backed-off retransmission still finds the receiver alive.
 
 
 ## Known limitations
@@ -347,7 +299,6 @@ When the SR receiver is used with `cc_sender.py`, set `LINGER` to at least `2 x 
 - **No flow control.** The receiver does not advertise its free buffer space. The sender simply keeps `cwnd` below a fixed cap.
 - **One sender and one flow at a time.** The receiver serves a single peer and handles one file per run. Fairness between competing senders has not been tested.
 - **Simplified network model.** `relay.py` has a single drop-tail queue in the forward direction, counts packets rather than bytes, and the sender-side `lossy_sendto` only simulates loss (no delay, duplication or reordering).
-- **No encryption or authentication.** The checksum detects accidental corruption only.
 
 
 ## Benchmark
